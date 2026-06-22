@@ -329,57 +329,108 @@ function printConfig(cfg: ComplexConfig) {
   console.log(c("gray", "  complex config host <name> set connect <ssh|mosh|…>"));
 }
 
-// ── help ──────────────────────────────────────────────────────────────────────
-function printHelp() {
-  console.log(`
-${c("cyan", c("bold", "  complex — voice-friendly tmux"))}
-
-  ${c("bold", "List & Switch (local or default host)")}
-  ${c("cyan", "complex")}                           list sessions on default host
-  ${c("cyan", "complex")} ${c("yellow", "<number>")}               switch/attach by list number
-  ${c("cyan", "complex")} ${c("yellow", "<name>")}                 switch/attach by name (fuzzy)
-  ${c("cyan", "complex windows")}                   list windows in current session
-
+// ── per-command help sections ─────────────────────────────────────────────────
+const VERB_HELP: Record<string, () => void> = {
+  host: () => console.log(`
   ${c("bold", "Remote Hosts")}
+  ${c("cyan", "complex host")}                      list all configured hosts
   ${c("cyan", "complex host")} ${c("magenta", "<host>")}             list sessions on a remote host
-  ${c("cyan", "complex host")} ${c("magenta", "<host>")} ${c("yellow", "<session>")}   attach to session on host
+  ${c("cyan", "complex host")} ${c("magenta", "<host>")} ${c("yellow", "<session>")}   attach to session on that host
+  ${c("gray", "  <host> can be a name, alias, or spoken alias (e.g. minitwo → mini2)")}
+  ${c("gray", "  complex config host add <name> <address>  to register a host")}
+  ${c("gray", "  complex config host <name> alias <word>   to add a spoken alias")}
+`),
 
+  attach: () => console.log(`
   ${c("bold", "Attach")}
+  ${c("cyan", "complex attach")}                    list sessions on default host
   ${c("cyan", "complex attach")} ${c("yellow", "<session>")}         attach to session on default host
   ${c("cyan", "complex attach")} ${c("magenta", "<host>")} ${c("yellow", "<session>")}  attach to session on a specific host
-  ${c("gray", "  Inside tmux: switch-client. Outside: attach-session.")}
-  ${c("gray", "  Remote: ssh/mosh + tmux attach in one command.")}
+  ${c("gray", "  Inside tmux: switch-client.  Outside: attach-session.")}
+  ${c("gray", "  Remote: opens ssh/mosh connection and attaches in one command.")}
+  ${c("gray", "  complex config set default <host>  to change the default host")}
+`),
 
-  ${c("bold", "Create & Destroy")}
-  ${c("cyan", "complex new")} ${c("yellow", "<name>")}             create and switch to new session
-  ${c("cyan", "complex kill")} ${c("yellow", "<number|name>")}     kill a session
-  ${c("cyan", "complex rename")} ${c("yellow", "<name>")}          rename current window
-  ${c("cyan", "complex detach")}                    detach current client
+  new: () => console.log(`
+  ${c("bold", "New session")}
+  ${c("cyan", "complex new")} ${c("yellow", "<name>")}             create and switch to a new tmux session
+  ${c("gray", "  Spaces become hyphens: complex new my project → my-project")}
+  ${c("gray", "  If the session already exists, switches to it instead")}
+`),
 
-  ${c("bold", "Navigate")}
-  ${c("cyan", "complex left")}  ${c("cyan", "right")}  ${c("cyan", "up")}  ${c("cyan", "down")}      move between panes
-  ${c("cyan", "complex next")}  ${c("cyan", "prev")}              next / previous window
-  ${c("cyan", "complex zoom")}                       toggle zoom on current pane
+  kill: () => console.log(`
+  ${c("bold", "Kill session")}
+  ${c("cyan", "complex kill")} ${c("yellow", "<number>")}          kill session by list number
+  ${c("cyan", "complex kill")} ${c("yellow", "<name>")}            kill session by name (fuzzy)
+`),
 
-  ${c("bold", "Split")}
-  ${c("cyan", "complex split")}                     split pane downward
-  ${c("cyan", "complex split right")}               split pane to the right
+  rename: () => console.log(`
+  ${c("bold", "Rename window")}
+  ${c("cyan", "complex rename")} ${c("yellow", "<name>")}          rename the current tmux window
+  ${c("gray", "  Spaces become hyphens")}
+`),
 
-  ${c("bold", "Session Aliases  (map hard-to-say session names to spoken words)")}
-  ${c("cyan", "complex alias")} ${c("yellow", "<word> <session>")}      add alias
-  ${c("cyan", "complex aliases")}                    list session aliases
-  ${c("cyan", "complex unalias")} ${c("yellow", "<word>")}              remove alias
+  split: () => console.log(`
+  ${c("bold", "Split pane")}
+  ${c("cyan", "complex split")}                     split pane downward (horizontal)
+  ${c("cyan", "complex split right")}               split pane to the right (vertical)
+`),
 
+  alias: () => console.log(`
+  ${c("bold", "Session aliases  (map hard-to-say names to spoken words)")}
+  ${c("cyan", "complex alias")}                     list all session aliases
+  ${c("cyan", "complex alias")} ${c("yellow", "<word> <session>")}   map a spoken word to a session name
+  ${c("cyan", "complex unalias")} ${c("yellow", "<word>")}           remove a session alias
+  ${c("gray", "  Example: complex alias yolo my-long-session-name")}
+`),
+
+  unalias: () => VERB_HELP["alias"](),
+
+  config: () => console.log(`
   ${c("bold", "Config")}
-  ${c("cyan", "complex config")}                    show all config
-  ${c("cyan", "complex config set connect")} ${c("yellow", "<cmd>")}   set global connect command
-  ${c("cyan", "complex config set default")} ${c("yellow", "<host|local>")}  set default host
-  ${c("cyan", "complex config host add")} ${c("yellow", "<name> <addr>")}  add remote host
-  ${c("cyan", "complex config host")} ${c("yellow", "<name>")} ${c("cyan", "alias")} ${c("yellow", "<word>")}   add spoken alias for host
+  ${c("cyan", "complex config")}                            show all config
+  ${c("cyan", "complex config set connect")} ${c("yellow", "<cmd>")}         set global connect command (ssh, mosh, …)
+  ${c("cyan", "complex config set default")} ${c("yellow", "<host|local>")}  set default host shown by ${c("cyan", "complex")}
+  ${c("cyan", "complex config hosts")}                       list configured hosts
+  ${c("cyan", "complex config aliases")}                     list host aliases
+
+  ${c("bold", "  Host management")}
+  ${c("cyan", "complex config host add")} ${c("yellow", "<name> <addr>")}    add a remote host
+  ${c("cyan", "complex config host")} ${c("yellow", "<name>")} ${c("cyan", "alias")} ${c("yellow", "<word>")}       add spoken alias for host
   ${c("cyan", "complex config host")} ${c("yellow", "<name>")} ${c("cyan", "set connect")} ${c("yellow", "<cmd>")}  per-host connect override
   ${c("cyan", "complex config host")} ${c("yellow", "<name>")} ${c("cyan", "set user")} ${c("yellow", "<user>")}    set ssh user for host
-  ${c("cyan", "complex config host")} ${c("yellow", "<name>")} ${c("cyan", "remove")}       remove host
-`);
+  ${c("cyan", "complex config host")} ${c("yellow", "<name>")} ${c("cyan", "remove")}             remove host
+`),
+};
+
+function usageError(verb: string, msg: string): never {
+  console.error(c("red", `  ${msg}`));
+  const helpFn = VERB_HELP[verb];
+  if (helpFn) { console.log(); helpFn(); }
+  process.exit(1);
+}
+
+// ── full help ──────────────────────────────────────────────────────────────────
+function printHelp() {
+  console.log(`\n${c("cyan", c("bold", "  complex — voice-friendly tmux"))}\n`);
+  console.log(`  ${c("bold", "List & Switch (local or default host)")}`);
+  console.log(`  ${c("cyan", "complex")}                           list sessions on default host`);
+  console.log(`  ${c("cyan", "complex")} ${c("yellow", "<number>")}               switch/attach by list number`);
+  console.log(`  ${c("cyan", "complex")} ${c("yellow", "<name>")}                 switch/attach by name (fuzzy)`);
+  console.log(`  ${c("cyan", "complex windows")}                   list windows in current session`);
+  VERB_HELP["host"]();
+  VERB_HELP["attach"]();
+  VERB_HELP["new"]();
+  VERB_HELP["kill"]();
+  VERB_HELP["rename"]();
+  console.log(`  ${c("cyan", "complex detach")}                    detach current client\n`);
+  console.log(`  ${c("bold", "Navigate")}`);
+  console.log(`  ${c("cyan", "complex left")}  ${c("cyan", "right")}  ${c("cyan", "up")}  ${c("cyan", "down")}      move between panes`);
+  console.log(`  ${c("cyan", "complex next")}  ${c("cyan", "prev")}              next / previous window`);
+  console.log(`  ${c("cyan", "complex zoom")}                       toggle zoom on current pane`);
+  VERB_HELP["split"]();
+  VERB_HELP["alias"]();
+  VERB_HELP["config"]();
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -440,11 +491,7 @@ if (verb === "host") {
   }
 
   const resolved = resolveHost(hostArg, cfg);
-  if (!resolved) {
-    console.error(c("red", `  complex: unknown host "${hostArg}"`));
-    console.error(c("gray", "  complex config host add <name> <address>  to register one"));
-    process.exit(1);
-  }
+  if (!resolved) usageError("host", `unknown host "${hostArg}" — add it with: complex config host add ${hostArg} <address>`);
   const [hostName, hostCfg] = resolved;
 
   if (!sessionArg) {
@@ -513,10 +560,7 @@ if (verb === "config") {
 
   if (sub === "set") {
     const [key, val] = crest;
-    if (!key || !val) {
-      console.error(c("red", "  Usage: complex config set <connect|default> <value>"));
-      process.exit(1);
-    }
+    if (!key || !val) usageError("config", "config set needs a key and a value");
     if (key === "connect") {
       cfg.connect = val;
       saveConfig(cfg);
@@ -541,10 +585,7 @@ if (verb === "config") {
 
     if (nameOrAction === "add") {
       const [hname, addr] = [action, hrest[0]];
-      if (!hname || !addr) {
-        console.error(c("red", "  Usage: complex config host add <name> <address>"));
-        process.exit(1);
-      }
+      if (!hname || !addr) usageError("config", "config host add needs a name and an address");
       cfg.hosts[hname] = { address: addr };
       saveConfig(cfg);
       console.log(c("green", `  Host "${hname}" added → ${addr}  (connect: ${cfg.connect})`));
@@ -552,10 +593,7 @@ if (verb === "config") {
     }
 
     const hname = nameOrAction;
-    if (!hname) {
-      console.error(c("red", "  Usage: complex config host <name> <set|alias|remove>"));
-      process.exit(1);
-    }
+    if (!hname) usageError("config", "config host needs a host name");
     if (!cfg.hosts[hname]) {
       console.error(c("red", `  No host "${hname}". Add it: complex config host add ${hname} <address>`));
       process.exit(1);
@@ -576,11 +614,7 @@ if (verb === "config") {
 
     if (action === "alias") {
       const word = hrest[0];
-      if (!word) {
-        console.error(c("red", `  Usage: complex config host ${hname} alias <spoken-word>`));
-        console.error(c("gray", `  Example: complex config host ${hname} alias minitwo`));
-        process.exit(1);
-      }
+      if (!word) usageError("config", `config host ${hname} alias needs a spoken word`);
       cfg.host_aliases[word] = hname;
       saveConfig(cfg);
       console.log(c("green", `  Host alias saved: say "${word}" → connects to "${hname}"`));
@@ -589,10 +623,7 @@ if (verb === "config") {
 
     if (action === "set") {
       const [key, val] = hrest;
-      if (!key || !val) {
-        console.error(c("red", `  Usage: complex config host ${hname} set <connect|user> <value>`));
-        process.exit(1);
-      }
+      if (!key || !val) usageError("config", `config host ${hname} set needs a key and a value`);
       if (key === "connect") {
         cfg.hosts[hname].connect = val;
         saveConfig(cfg);
@@ -608,12 +639,10 @@ if (verb === "config") {
       process.exit(0);
     }
 
-    console.error(c("red", `  Unknown host action "${action}". Try: set, alias, remove`));
-    process.exit(1);
+    usageError("config", `unknown host action "${action}" — try: set, alias, remove`);
   }
 
-  console.error(c("red", `  Unknown config subcommand "${sub}". Try: show, set, host, hosts, aliases`));
-  process.exit(1);
+  usageError("config", `unknown config subcommand "${sub}" — try: show, set, host, hosts, aliases`);
 }
 
 // ── alias management ──────────────────────────────────────────────────────────
@@ -630,10 +659,7 @@ if (verb === "alias") {
     }
     process.exit(0);
   }
-  if (!target) {
-    console.error(c("red", "  Usage: complex alias <spoken-word> <session-name>"));
-    process.exit(1);
-  }
+  if (!target) usageError("alias", "alias needs both a spoken word and a session name");
   aliases[spoken] = target;
   saveAliases(aliases);
   console.log(c("green", `  Session alias saved: "${spoken}" → "${target}"`));
@@ -654,7 +680,7 @@ if (verb === "aliases") {
 
 if (verb === "unalias") {
   const spoken = rest[0];
-  if (!spoken) { console.error(c("red", "  Usage: complex unalias <spoken-word>")); process.exit(1); }
+  if (!spoken) usageError("unalias", "unalias needs a spoken word");
   if (!(spoken in aliases)) {
     console.error(c("yellow", `  No session alias "${spoken}" found.`));
     process.exit(1);
@@ -692,7 +718,7 @@ if (verb === "new") {
 // ── kill ──────────────────────────────────────────────────────────────────────
 if (verb === "kill") {
   const target = rest[0];
-  if (!target) { console.error(c("red", "  complex: kill needs a number or name")); process.exit(1); }
+  if (!target) usageError("kill", "kill needs a session number or name");
   const killSessions = getLocalSessions();
   const s = resolveSession(target, killSessions, aliases);
   if (!s) {
@@ -731,7 +757,7 @@ if (verb === "zoom" || verb === "focus") { tmux(["resize-pane", "-Z"]); process.
 // ── rename window ─────────────────────────────────────────────────────────────
 if (verb === "rename") {
   const name = rest.join("-");
-  if (!name) { console.error(c("red", "  complex: rename needs a name")); process.exit(1); }
+  if (!name) usageError("rename", "rename needs a name");
   tmux(["rename-window", name]);
   console.log(c("green", `  Window renamed to "${name}".`));
   process.exit(0);
