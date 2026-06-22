@@ -4,6 +4,8 @@
 // Default (no args): numbered session list for voice selection.
 
 import { spawnSync } from "child_process";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "fs";
+import { join } from "path";
 
 // ── ANSI ──────────────────────────────────────────────────────────────────────
 const C = {
@@ -42,14 +44,38 @@ function tmuxOk(...args: string[]): boolean {
   return spawnSync("tmux", args, { encoding: "utf8" }).status === 0;
 }
 
+// ── config store ──────────────────────────────────────────────────────────────
+const CONFIG_DIR  = join(process.env.HOME!, ".config", "complex");
+const ALIAS_FILE  = join(CONFIG_DIR, "aliases.json");
+const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+
+interface HostConfig {
+  address: string;   // hostname or IP
+  user?: string;     // ssh user, defaults to current user
+  connect?: string;  // overrides global connect command for this host
+}
+
+interface ComplexConfig {
+  connect: string;                    // default connection command: "ssh" | "mosh" | any binary
+  hosts: Record<string, HostConfig>;  // named remote hosts
+}
+
+const CONFIG_DEFAULTS: ComplexConfig = { connect: "ssh", hosts: {} };
+
+function loadConfig(): ComplexConfig {
+  if (!existsSync(CONFIG_FILE)) return { ...CONFIG_DEFAULTS, hosts: {} };
+  try {
+    const parsed = JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
+    return { ...CONFIG_DEFAULTS, ...parsed, hosts: parsed.hosts ?? {} };
+  } catch { return { ...CONFIG_DEFAULTS, hosts: {} }; }
+}
+
+function saveConfig(cfg: ComplexConfig) {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n");
+}
+
 // ── alias store ───────────────────────────────────────────────────────────────
-// Maps spoken word → tmux session name. Persisted to ~/.config/complex/aliases.json
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "fs";
-import { join } from "path";
-
-const ALIAS_DIR  = join(process.env.HOME!, ".config", "complex");
-const ALIAS_FILE = join(ALIAS_DIR, "aliases.json");
-
 function loadAliases(): Record<string, string> {
   if (!existsSync(ALIAS_FILE)) return {};
   try { return JSON.parse(readFileSync(ALIAS_FILE, "utf8")); }
@@ -57,7 +83,7 @@ function loadAliases(): Record<string, string> {
 }
 
 function saveAliases(aliases: Record<string, string>) {
-  mkdirSync(ALIAS_DIR, { recursive: true });
+  mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(ALIAS_FILE, JSON.stringify(aliases, null, 2) + "\n");
 }
 
@@ -76,12 +102,10 @@ function getSessions(): Session[] {
   });
 }
 
-// Resolve <N> (1-based list position) or <spoken> (alias → exact → prefix → fuzzy).
-// Aliases are checked first so hard-to-say names always have a voice-friendly form.
+// Resolve <N> (1-based) or <spoken> (alias → exact → prefix → fuzzy).
 function resolveSession(arg: string, sessions: Session[], aliases: Record<string, string> = {}): Session | null {
   const n = parseInt(arg, 10);
   if (!isNaN(n) && n >= 1 && n <= sessions.length) return sessions[n - 1];
-  // alias lookup — maps spoken word to real session name, then resolves that
   const aliasTarget = aliases[arg];
   if (aliasTarget) {
     const byAlias = sessions.find((s) => s.name === aliasTarget);
@@ -117,13 +141,13 @@ function suggestSessions(arg: string, sessions: Session[], aliases: Record<strin
   const out: Suggestion[] = [];
   for (const s of sessions) {
     const d = levenshtein(arg, s.name);
-    const norm = d / Math.max(arg.length, s.name.length, 1);
-    if (norm <= 0.6) out.push({ display: s.name, score: d });
+    if (d / Math.max(arg.length, s.name.length, 1) <= 0.6)
+      out.push({ display: s.name, score: d });
   }
   for (const [spoken, target] of Object.entries(aliases)) {
     const d = levenshtein(arg, spoken);
-    const norm = d / Math.max(arg.length, spoken.length, 1);
-    if (norm <= 0.6) out.push({ display: `${spoken} ${c("gray", `(alias → ${target})`)}`, score: d });
+    if (d / Math.max(arg.length, spoken.length, 1) <= 0.6)
+      out.push({ display: `${spoken} ${c("gray", `(alias → ${target})`)}`, score: d });
   }
   return out.sort((a, b) => a.score - b.score).slice(0, 3);
 }
@@ -142,7 +166,6 @@ function printSessions(sessions: Session[], aliases: Record<string, string> = {}
     console.log(c("gray",   "  complex new <name>  to create one"));
     return;
   }
-  // Build reverse map: session name → spoken alias (for display)
   const spokenFor: Record<string, string> = {};
   for (const [spoken, target] of Object.entries(aliases)) spokenFor[target] = spoken;
 
@@ -183,47 +206,82 @@ function printWindows() {
   }
 }
 
+// ── config display ────────────────────────────────────────────────────────────
+function printConfig(cfg: ComplexConfig) {
+  console.log();
+  console.log(c("cyan", c("bold", "  complex — config")));
+  console.log();
+  console.log(`  ${c("gray", "connect")}   ${c("white", cfg.connect)}`);
+  console.log();
+  const hosts = Object.entries(cfg.hosts);
+  if (hosts.length === 0) {
+    console.log(c("gray", "  No remote hosts configured."));
+    console.log(c("gray", "  complex config host add <name> <address>"));
+  } else {
+    console.log(c("gray", `  ${"host".padEnd(14)} ${"address".padEnd(22)} ${"user".padEnd(12)} connect`));
+    console.log(c("gray", "  " + "─".repeat(60)));
+    for (const [name, h] of hosts.sort()) {
+      const connect = h.connect ? c("yellow", h.connect) : c("gray", `(${cfg.connect})`);
+      const user    = h.user    ? c("white",  h.user)    : c("gray", "(default)");
+      console.log(`  ${c("white", name.padEnd(14))} ${h.address.padEnd(22)} ${user.padEnd(12)}  ${connect}`);
+    }
+  }
+  console.log();
+  console.log(c("gray", "  complex config set connect <ssh|mosh|…>"));
+  console.log(c("gray", "  complex config host add <name> <address>"));
+  console.log(c("gray", "  complex config host <name> set connect <ssh|mosh|…>"));
+}
+
 // ── help ──────────────────────────────────────────────────────────────────────
 function printHelp() {
   console.log(`
 ${c("cyan", c("bold", "  complex — voice-friendly tmux"))}
 
   ${c("bold", "List & Switch")}
-  ${c("cyan", "complex")}                   list all sessions (numbered)
-  ${c("cyan", "complex")} ${c("yellow", "<number>")}         switch to session by list number
-  ${c("cyan", "complex")} ${c("yellow", "<name>")}           switch by name (fuzzy — no hyphens needed)
-  ${c("cyan", "complex attach")} ${c("yellow", "<number|name>")}  attach from outside tmux, or switch if inside
-  ${c("gray", "                           number can be spoken: one two three … ten eleven")}
-  ${c("cyan", "complex windows")}           list windows in current session
+  ${c("cyan", "complex")}                           list all sessions (numbered)
+  ${c("cyan", "complex")} ${c("yellow", "<number>")}               switch to session by list number
+  ${c("cyan", "complex")} ${c("yellow", "<name>")}                 switch by name (fuzzy — no hyphens needed)
+  ${c("cyan", "complex attach")} ${c("yellow", "<number|name>")}        attach from outside tmux, or switch if inside
+  ${c("gray", "                                   number can be spoken: one two three … twenty")}
+  ${c("cyan", "complex windows")}                   list windows in current session
 
   ${c("bold", "Create & Destroy")}
-  ${c("cyan", "complex new")} ${c("yellow", "<name>")}       create and switch to new session
-  ${c("cyan", "complex kill")} ${c("yellow", "<number|name>")} kill a session
-  ${c("cyan", "complex rename")} ${c("yellow", "<name>")}    rename current window
-  ${c("cyan", "complex detach")}            detach current client
+  ${c("cyan", "complex new")} ${c("yellow", "<name>")}             create and switch to new session
+  ${c("cyan", "complex kill")} ${c("yellow", "<number|name>")}     kill a session
+  ${c("cyan", "complex rename")} ${c("yellow", "<name>")}          rename current window
+  ${c("cyan", "complex detach")}                    detach current client
 
   ${c("bold", "Navigate")}
-  ${c("cyan", "complex left")}  ${c("cyan", "right")}  ${c("cyan", "up")}  ${c("cyan", "down")}  move between panes
-  ${c("cyan", "complex next")}  ${c("cyan", "prev")}          next / previous window
-  ${c("cyan", "complex zoom")}               toggle zoom on current pane
+  ${c("cyan", "complex left")}  ${c("cyan", "right")}  ${c("cyan", "up")}  ${c("cyan", "down")}      move between panes
+  ${c("cyan", "complex next")}  ${c("cyan", "prev")}              next / previous window
+  ${c("cyan", "complex zoom")}                       toggle zoom on current pane
 
   ${c("bold", "Split")}
-  ${c("cyan", "complex split")}             split pane downward
-  ${c("cyan", "complex split right")}       split pane to the right
+  ${c("cyan", "complex split")}                     split pane downward
+  ${c("cyan", "complex split right")}               split pane to the right
 
   ${c("bold", "Aliases  (map hard-to-say names to spoken words)")}
-  ${c("cyan", "complex alias")} ${c("yellow", "<word> <session>")}  add alias  (e.g. alias chariot chrote-chat)
-  ${c("cyan", "complex aliases")}            list all aliases
-  ${c("cyan", "complex unalias")} ${c("yellow", "<word>")}         remove alias
+  ${c("cyan", "complex alias")} ${c("yellow", "<word> <session>")}      add alias
+  ${c("cyan", "complex aliases")}                    list all aliases
+  ${c("cyan", "complex unalias")} ${c("yellow", "<word>")}              remove alias
+
+  ${c("bold", "Config  (connection commands and remote hosts)")}
+  ${c("cyan", "complex config")}                    show current config
+  ${c("cyan", "complex config set connect")} ${c("yellow", "<cmd>")}   set global connect command (ssh, mosh, …)
+  ${c("cyan", "complex config host add")} ${c("yellow", "<name> <addr>")}  add a remote host
+  ${c("cyan", "complex config host")} ${c("yellow", "<name>")} ${c("cyan", "set connect")} ${c("yellow", "<cmd>")}  per-host override
+  ${c("cyan", "complex config host")} ${c("yellow", "<name>")} ${c("cyan", "set user")} ${c("yellow", "<user>")}      set ssh user for host
+  ${c("cyan", "complex config host")} ${c("yellow", "<name>")} ${c("cyan", "remove")}       remove a host
+  ${c("cyan", "complex config hosts")}               list configured hosts
 `);
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
-// Lowercase everything so voice dictation capitalisation never matters.
 const argv = process.argv.slice(2).map((w) => w.toLowerCase());
 const [verb, ...rest] = argv;
 
 const aliases = loadAliases();
+const cfg     = loadConfig();
 
 // ── default: no args → numbered session list ──────────────────────────────────
 if (!verb) {
@@ -234,14 +292,121 @@ if (!verb) {
   process.exit(0);
 }
 
-// ── help (plain word, no dashes) ─────────────────────────────────────────────
+// ── help ──────────────────────────────────────────────────────────────────────
 if (verb === "help") { printHelp(); process.exit(0); }
+
+// ── config ────────────────────────────────────────────────────────────────────
+if (verb === "config") {
+  const [sub, ...crest] = rest;
+
+  // complex config  (no sub) → show
+  if (!sub || sub === "show") { printConfig(cfg); process.exit(0); }
+
+  // complex config hosts → list hosts only
+  if (sub === "hosts") {
+    const hosts = Object.entries(cfg.hosts);
+    if (hosts.length === 0) {
+      console.log(c("gray", "  No remote hosts. complex config host add <name> <address>"));
+    } else {
+      console.log(c("cyan", c("bold", "  Hosts")));
+      for (const [name, h] of hosts.sort()) {
+        const connect = h.connect ? c("yellow", h.connect) : c("gray", `(${cfg.connect})`);
+        const user    = h.user    ? ` user=${c("white", h.user)}` : "";
+        console.log(`  ${c("white", name.padEnd(14))} ${h.address.padEnd(24)}${user}  ${connect}`);
+      }
+    }
+    process.exit(0);
+  }
+
+  // complex config set <key> <value>
+  if (sub === "set") {
+    const [key, val] = crest;
+    if (!key || !val) {
+      console.error(c("red", "  Usage: complex config set connect <ssh|mosh|…>"));
+      process.exit(1);
+    }
+    if (key === "connect") {
+      cfg.connect = val;
+      saveConfig(cfg);
+      console.log(c("green", `  Global connect command set to "${val}".`));
+    } else {
+      console.error(c("red", `  Unknown config key "${key}". Valid keys: connect`));
+      process.exit(1);
+    }
+    process.exit(0);
+  }
+
+  // complex config host <name> <action> [args…]
+  if (sub === "host") {
+    const [nameOrAction, action, ...hrest] = crest;
+
+    // complex config host add <name> <address>
+    if (nameOrAction === "add") {
+      const [hname, addr] = [action, hrest[0]];
+      if (!hname || !addr) {
+        console.error(c("red", "  Usage: complex config host add <name> <address>"));
+        console.error(c("gray", "  Example: complex config host add mini2 mini2.local"));
+        process.exit(1);
+      }
+      cfg.hosts[hname] = { address: addr };
+      saveConfig(cfg);
+      console.log(c("green", `  Host "${hname}" added → ${addr}  (connect: ${cfg.connect})`));
+      process.exit(0);
+    }
+
+    // complex config host <name> set <key> <value>
+    // complex config host <name> remove
+    const hname = nameOrAction;
+    if (!hname) {
+      console.error(c("red", "  Usage: complex config host <name> set connect <cmd>"));
+      process.exit(1);
+    }
+    if (!cfg.hosts[hname]) {
+      console.error(c("red", `  No host "${hname}". Add it first: complex config host add ${hname} <address>`));
+      process.exit(1);
+    }
+
+    if (action === "remove") {
+      const addr = cfg.hosts[hname].address;
+      delete cfg.hosts[hname];
+      saveConfig(cfg);
+      console.log(c("green", `  Host "${hname}" (${addr}) removed.`));
+      process.exit(0);
+    }
+
+    if (action === "set") {
+      const [key, val] = hrest;
+      if (!key || !val) {
+        console.error(c("red", `  Usage: complex config host ${hname} set <connect|user> <value>`));
+        process.exit(1);
+      }
+      if (key === "connect") {
+        cfg.hosts[hname].connect = val;
+        saveConfig(cfg);
+        console.log(c("green", `  Host "${hname}" connect set to "${val}".`));
+      } else if (key === "user") {
+        cfg.hosts[hname].user = val;
+        saveConfig(cfg);
+        console.log(c("green", `  Host "${hname}" user set to "${val}".`));
+      } else {
+        console.error(c("red", `  Unknown host key "${key}". Valid keys: connect, user`));
+        process.exit(1);
+      }
+      process.exit(0);
+    }
+
+    console.error(c("red", `  Unknown host action "${action}". Try: set, remove`));
+    process.exit(1);
+  }
+
+  console.error(c("red", `  Unknown config subcommand "${sub}". Try: show, set, host, hosts`));
+  process.exit(1);
+}
 
 // ── alias management ──────────────────────────────────────────────────────────
 if (verb === "alias") {
   const [spoken, target] = rest;
   if (!spoken) {
-    // "complex alias" with no args → same as "complex aliases"
     const entries = Object.entries(aliases);
     if (entries.length === 0) {
       console.log(c("gray", "  No aliases yet.  complex alias <spoken> <session-name>"));
@@ -300,7 +465,6 @@ if (verb === "windows" || verb === "wins") {
 
 // ── new session ───────────────────────────────────────────────────────────────
 if (verb === "new") {
-  // Join args with hyphens internally — user speaks plain words, we handle the dash
   const name = rest.join("-") || "unnamed";
   if (tmuxOk("has-session", "-t", name)) {
     console.log(c("yellow", `  Session "${name}" already exists — switching to it.`));
@@ -361,7 +525,7 @@ if (verb === "rename") {
   process.exit(0);
 }
 
-// ── send keys (power-user passthrough) ───────────────────────────────────────
+// ── send keys ─────────────────────────────────────────────────────────────────
 if (verb === "send") { tmux(["send-keys", ...rest]); process.exit(0); }
 
 // ── attach (works inside or outside tmux) ────────────────────────────────────
@@ -391,9 +555,6 @@ if (verb === "attach") {
 }
 
 // ── switch by number or name ──────────────────────────────────────────────────
-// This is the fallthrough: any unrecognised word is tried as a session selector.
-// "complex yolo" → switch to yolo. "complex 3" → switch to 3rd in list.
-// "complex chrote" → fuzzy-matches "chrote-chat" — no hyphen needed.
 const sessions = getSessions();
 const target = resolveSession(wordToNum(verb), sessions, aliases);
 if (target) {
