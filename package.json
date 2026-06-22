@@ -1,0 +1,14 @@
+{
+  "name": "complex",
+  "version": "0.1.0",
+  "description": "Voice-friendly tmux wrapper",
+  "bin": {
+    "complex": "./complex.ts"
+  },
+  "scripts": {
+    "start": "bun complex.ts"
+  },
+  "devDependencies": {
+    "bun-types": "latest"
+  }
+}
